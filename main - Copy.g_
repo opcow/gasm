@@ -1,0 +1,112 @@
+// go dasm
+package main
+
+import (
+	"bufio"
+	"fmt"
+	"io"
+	"os"
+	"path/filepath"
+	"strings"
+)
+
+const (
+	maxMem  = 0x1000
+	maxSegs = 64
+	maxRead = 0x8000
+)
+
+func main() {
+	var ifName string
+	// var memory [maxMem]byte
+	// var segments [maxSegs]int
+
+	if len(os.Args) < 2 {
+		fmt.Println("Usage: gasm infile")
+		os.Exit(1)
+	}
+	ifName = os.Args[1]
+
+	finfo, err := os.Stat(ifName)
+	if err != nil {
+		fmt.Println("gasm: couldn't stat input file")
+		os.Exit(1)
+	}
+	fSize := finfo.Size()
+	if fSize > maxRead {
+		fmt.Println("gasm: input file exceeds max size (32k)")
+		os.Exit(1)
+	}
+	fileEnd := int(fSize)
+
+	f, err := os.Open(ifName)
+	if err != nil {
+		panic(err)
+	}
+	data := make([]byte, fSize)
+	{
+		//		header := make([]byte, 2)
+		defer f.Close()
+		bufr := bufio.NewReader(f)
+		_, err := io.ReadFull(bufr, data[:2])
+		//		_, err := bufr.Read(data)
+		if err != nil {
+			panic(err)
+		}
+		if data[0] == 0xff && data[1] == 0xff {
+		}
+	}
+
+	initInstuctions()
+	initFuncs()
+	fn := filepath.Base(ifName)
+	fmt.Print(";;;;;;;;;;;;;;;;;;;;;;;;;")
+	fmt.Print(strings.Repeat(";", len(fn)))
+	fmt.Print(";;;;;\n")
+	fmt.Printf(";;;; disassembly of file %s ;;;;\n", fn)
+	fmt.Print(";;;;;;;;;;;;;;;;;;;;;;;;;")
+	fmt.Print(strings.Repeat(";", len(fn)))
+	fmt.Print(";;;;;\n")
+	segStart := 0
+
+	for i := 1; segStart < fileEnd; i++ {
+		if data[segStart] == 0xff && data[segStart+1] == 0xff {
+			segStart += 2
+		}
+		if fileEnd-segStart < 5 {
+			break
+		}
+		startAdd := int(data[segStart]) | int(data[segStart+1])<<8
+		endAdd := int(data[segStart+2]) | int(data[segStart+3])<<8
+		dataLen := (endAdd - startAdd) + 1
+		segStart += 4
+		fmt.Printf("\n; segment %03d\n", i)
+		disAsmSeg(startAdd, dataLen, data[segStart:])
+		segStart += dataLen
+	}
+}
+
+func disAsmSeg(segAdd, segLen int, seg []byte) {
+
+	fmt.Printf("\n             .ORG $%04x\n\n", segAdd)
+
+	for i := 0; i < segLen; {
+		il := instructions[seg[i]].length
+		im := instructions[seg[i]].mode
+		fmt.Printf("%04X ", segAdd+i)
+		switch il {
+		case 1:
+			fmt.Printf("%02X       ", seg[i])
+		case 2:
+			fmt.Printf("%02X %02X    ", seg[i], seg[i+1])
+		case 3:
+			fmt.Printf("%02X %02X %02X ", seg[i], seg[i+1], seg[i+2])
+		}
+		printInst[im](instructions[seg[i]], seg[i:])
+		if il == 0 {
+			i++
+		} else {
+			i += il
+		}
+	}
+}
