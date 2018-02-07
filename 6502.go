@@ -200,7 +200,7 @@ func fetchInstr(addr int, in *instruction) {
 		in.ops[0] = memory[addr+1]
 	}
 	if in.length == 3 {
-		in.ops[0] = memory[addr+2]
+		in.ops[1] = memory[addr+2]
 	}
 
 	in.next = addr + in.length
