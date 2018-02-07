@@ -21,8 +21,8 @@ type segCounter struct {
 	}
 }
 
-var memory [maxMem]byte
-var memmap [maxMem]byte
+var memory [maxMem]byte // segment will load into 64k memory
+var memmap [maxMem]byte // used for tracing control flow, etc
 
 var segments segCounter
 var jumps *stack.Stack
@@ -121,6 +121,19 @@ func printDataBlock(addr, end int) int {
 	return i
 }
 
+func printLine(addr int, in *instruction) {
+	var buffer bytes.Buffer
+
+	s := fmt.Sprintf("%04X %02X", addr, in.code)
+	if in.length == 2 {
+		s = fmt.Sprintf("%s %02X ", s, in.ops[0])
+	} else if in.length == 3 {
+		s = fmt.Sprintf("%s %02X %02X ", s, in.ops[0], in.ops[1])
+	}
+	buffer.Write([]byte(fmt.Sprintf("%-16s", s)))
+	buffer.WriteTo(of)
+}
+
 func disAsm() {
 
 	for i := 0; i < segments.count; i++ {
@@ -164,41 +177,37 @@ func disAsmSegP1(addr, end int) {
 	var instr instruction
 	jumps = stack.New()
 
+FETCH:
 	for addr < end {
 		fetchInstr(addr, &instr)
+		// leave breadcrumbs where we've been
 		for i := addr; i < instr.next; i++ {
 			memmap[i] |= (1 << 0)
 		}
+		// if JSR to somewhere mark that location
+		// and push it onto the stack
 		if instr.code == 0x20 {
 			memmap[instr.branch] |= (1 << 2)
 			if isAddressInSeg(instr.branch) >= 0 {
 				jumps.Push(instr.branch)
 			}
+			// if it's a branch just mark the location
+			// for label printing
 		} else if instr.mode == rel {
 			memmap[instr.branch] |= (1 << 1)
+			// if RTS then pop any jumps and follow
 		} else if instr.code == 0x60 {
-			if jumps.Len() == 0 {
-				return
+			for jumps.Len() != 0 {
+				addr = jumps.Pop().(int)
+				// don't follow if location has been visited
+				if memmap[addr]&(1<<0) != 1 {
+					continue FETCH
+				}
 			}
-			addr = jumps.Pop().(int)
-			continue
+			return
 		}
 		addr = instr.next
 	}
-}
-
-func printLine(addr int, in *instruction) {
-	var buffer bytes.Buffer
-
-	buffer.Write([]byte(fmt.Sprintf("%04X ", addr)))
-	buffer.Write([]byte(fmt.Sprintf("%02X ", in.code)))
-	if in.length == 2 {
-		buffer.Write([]byte(fmt.Sprintf("%02X ", in.ops[0])))
-	} else if in.length == 3 {
-		buffer.Write([]byte(fmt.Sprintf("%02X %02X ", in.ops[0], in.ops[1])))
-	}
-	buffer.Write([]byte(fmt.Sprintf("%-16s", buffer.String())))
-	buffer.WriteTo(of)
 }
 
 func isAddressInSeg(addr int) int {
