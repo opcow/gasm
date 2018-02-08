@@ -1,3 +1,3 @@
-# gasm
+# **gasm**
 
-A 6502 assembler. Currently only disassembles.
+A **6502** assembler. Currently only disassembles.
