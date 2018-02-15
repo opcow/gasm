@@ -1,4 +1,4 @@
-// go dasm
+// Package main a 6502 disassembler/assembler
 package main
 
 import (
@@ -25,7 +25,11 @@ func main() {
 
 	var ifName string
 
+	log.SetPrefix("gasm: ")
+	log.SetFlags(0)
+
 	flag.Parse()
+	//	flag.PrintDefaults()
 
 	if len(flag.Args()) < 1 {
 		fmt.Fprintln(os.Stderr, "Usage: gasm infile")
@@ -35,25 +39,23 @@ func main() {
 
 	finfo, err := os.Stat(ifName)
 	if err != nil {
-		fmt.Println("gasm: couldn't stat input file")
-		os.Exit(1)
+		log.Fatal("couldn't stat input file")
 	}
 	fSize := finfo.Size()
 	if fSize > maxRead {
-		fmt.Fprintln(os.Stderr, "gasm: input file exceeds max size (64k)")
-		os.Exit(1)
+		log.Fatal("input file exceeds max size (64k)")
 	}
 	fileEnd := int(fSize)
 
 	f, err := os.Open(ifName)
 	if err != nil {
-		log.Fatal(err)
+		log.Fatalf("couldn't open input: %v", err)
 	}
 
 	if *outFile != "" {
 		of, err = os.Create(*outFile)
 		if err != nil {
-			log.Fatal(err)
+			log.Fatalf("couldn't create output: %v", err)
 		}
 		defer of.Close()
 	} else {
@@ -92,12 +94,11 @@ func main() {
 			startAdd := int(header[0]) | int(header[1])<<8
 			endAdd := int(header[2]) | int(header[3])<<8
 			if startAdd < 0 || startAdd > 0xffff || endAdd < startAdd || endAdd > 0xffff {
-				fmt.Fprintln(os.Stderr, "gasm: address error in binary")
-				os.Exit(1)
+				log.Fatal("address error in binary")
 			}
 			br, err = io.ReadFull(bufr, memory[startAdd:endAdd+1])
 			if err != nil {
-				log.Fatal(err)
+				log.Fatalf("error reading input: %v", err)
 			}
 			segments.seg[segments.count].start = startAdd
 			segments.seg[segments.count].end = endAdd + 1
@@ -120,6 +121,5 @@ func main() {
 	// 	}
 	// }
 	// fmt.Println("};")
-	initPrintFuncs()
 	disAsm()
 }

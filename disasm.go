@@ -1,15 +1,14 @@
+// Package gasm a 6502 disassembler/assembler
 package main
 
 import (
-	"bytes"
 	"fmt"
-	"os"
 
 	"github.com/golang-collections/collections/stack"
+	"github.com/opcow/cpu65"
 )
 
 const (
-	maxMem  = 0x10000
 	maxSegs = 64
 )
 
@@ -21,118 +20,12 @@ type segCounter struct {
 	}
 }
 
-var memory [maxMem]byte // segment will load into 64k memory
-var memmap [maxMem]byte // used for tracing control flow, etc
+var memory [cpu65.MaxMem]byte // segment will load into 64k memory
+var memmap [cpu65.MaxMem]byte // used for tracing control flow, etc
 
 var segments segCounter
-var jumps *stack.Stack
 
-var printInst [imp + 1]func(instr *instruction)
-
-func initPrintFuncs() {
-	printInst[imm] = printImm
-	printInst[zpa] = printZp
-	printInst[zpx] = printZpx
-	printInst[abs] = printAbs
-	printInst[abx] = printAbsx
-	printInst[aby] = printAbsy
-	printInst[ind] = printInd
-	printInst[inx] = printIndx
-	printInst[iny] = printIndy
-	printInst[acc] = printAcc
-	printInst[rel] = printRel
-	printInst[imp] = printImp
-}
-
-func printImm(instr *instruction) {
-	printToFile(of, fmt.Sprintf("%s #$%02x\n", instr.mnemonic, instr.ops[0]))
-}
-
-func printZp(instr *instruction) {
-	printToFile(of, fmt.Sprintf("%s $%02x\n", instr.mnemonic, instr.ops[0]))
-}
-
-func printZpx(instr *instruction) {
-	printToFile(of, fmt.Sprintf("%s $%02x,X\n", instr.mnemonic, instr.ops[0]))
-}
-
-func printAbs(instr *instruction) {
-	if instr.code == 0x20 { // JSR
-		if memmap[instr.branch]&(1<<2) != 0 {
-			printToFile(of, fmt.Sprintf("%s sub_%02x\n", instr.mnemonic, instr.branch))
-		}
-	} else {
-		printToFile(of, fmt.Sprintf("%s $%02x%02x\n", instr.mnemonic, instr.ops[1], instr.ops[0]))
-	}
-}
-
-func printAbsx(instr *instruction) {
-	printToFile(of, fmt.Sprintf("%s $%02x%02x,X\n", instr.mnemonic, instr.ops[1], instr.ops[0]))
-}
-
-func printAbsy(instr *instruction) {
-	printToFile(of, fmt.Sprintf("%s $%02x%02x,Y\n", instr.mnemonic, instr.ops[1], instr.ops[0]))
-}
-
-func printInd(instr *instruction) {
-	printToFile(of, fmt.Sprintf("%s ($%02x%02x)\n", instr.mnemonic, instr.ops[1], instr.ops[0]))
-}
-
-func printIndx(instr *instruction) {
-	printToFile(of, fmt.Sprintf("%s ($%02x,X)\n", instr.mnemonic, instr.ops[0]))
-}
-
-func printIndy(instr *instruction) {
-	printToFile(of, fmt.Sprintf("%s ($%02x),Y\n", instr.mnemonic, instr.ops[0]))
-}
-
-func printAcc(instr *instruction) {
-	printToFile(of, fmt.Sprintf("%s \n", instr.mnemonic))
-}
-
-func printRel(instr *instruction) {
-	if memmap[instr.branch]&(1<<1) != 0 {
-		printToFile(of, fmt.Sprintf("%s loc_%02x\n", instr.mnemonic, instr.branch))
-	} else {
-		printToFile(of, fmt.Sprintf("%s $%02x\n", instr.mnemonic, instr.ops[0]))
-	}
-}
-
-func printImp(instr *instruction) {
-	printToFile(of, fmt.Sprintf("%s\n", instr.mnemonic))
-}
-
-func printToFile(f *os.File, s string) {
-	var b bytes.Buffer
-	b.Write([]byte(s))
-	b.WriteTo(f)
-}
-
-func printDataBlock(addr, end int) int {
-	if *prAddr {
-		printToFile(of, fmt.Sprintf("%04X            ", addr))
-	}
-	printToFile(of, fmt.Sprintf("    .byte $%02x", memory[addr]))
-	i := 1
-	for ; i < 8 && addr+i < end && memmap[addr+i] == 0; i++ {
-		printToFile(of, fmt.Sprintf(", $%02x", memory[addr+i]))
-	}
-	printToFile(of, fmt.Sprint("\n"))
-	return i
-}
-
-func printLine(addr int, in *instruction) {
-	var buffer bytes.Buffer
-
-	s := fmt.Sprintf("%04X %02X", addr, in.code)
-	if in.length == 2 {
-		s = fmt.Sprintf("%s %02X ", s, in.ops[0])
-	} else if in.length == 3 {
-		s = fmt.Sprintf("%s %02X %02X ", s, in.ops[0], in.ops[1])
-	}
-	buffer.Write([]byte(fmt.Sprintf("%-16s", s)))
-	buffer.WriteTo(of)
-}
+var cpu cpu65.CPU
 
 func disAsm() {
 
@@ -144,11 +37,83 @@ func disAsm() {
 			segments.seg[i].end-segments.seg[i].start))
 		disAsmSegP2(segments.seg[i].start, segments.seg[i].end)
 	}
+	graphStart()
+	for i := 0; i < segments.count; i++ {
+		printLabels(segments.seg[i].start, segments.seg[i].end)
+	}
+	//	for i := 0; i < segments.count; i++ {
+	printNodes(segments.seg[0].start)
+	//	}
+	for i := 0; i < segments.count; i++ {
+		printBranches(segments.seg[i].start, segments.seg[i].end)
+	}
+	graphEnd()
+}
+
+func printLabels(addr, end int) {
+
+	cpu.SetPC(addr)
+	for i := addr; i < end; {
+		if memmap[i] == 0 {
+			i++
+			continue
+		}
+		cpu.FetchInstr()
+		graphLabel(&cpu)
+		i = cpu.Next()
+	}
+}
+
+func printNodes(addr int) {
+
+	returns := stack.New()
+	cpu.SetPC(addr)
+	firstNode = true
+	for {
+		if memmap[addr] == 0 {
+			break
+		}
+		cpu.FetchInstr()
+		graphNode(cpu.PC())
+		if cpu.Opcode() == 0x20 {
+			returns.Push(addr + cpu.InsLen())
+			j := cpu.AbsJumpAddr()
+			addr = j
+			cpu.SetPC(j)
+		} else if cpu.Opcode() == 0x60 {
+			if returns.Len() == 0 {
+				break
+			}
+			addr = returns.Pop().(int)
+			cpu.SetPC(addr)
+		} else {
+			addr = cpu.Next()
+		}
+	}
+	fmt.Println(";")
+}
+
+func printBranches(addr, end int) {
+
+	cpu.SetPC(addr)
+	firstNode = true
+	for i := addr; i < end; {
+		if memmap[i] == 0 {
+			i++
+			continue
+		}
+		cpu.FetchInstr()
+		if cpu.Mode() == cpu65.Rel {
+			graphBranch(i, cpu.BranchAddr())
+		}
+		//graphNode(&cpu)
+		i = cpu.Next()
+	}
 }
 
 // disassemble pass 2
 func disAsmSegP2(addr, end int) {
-	var instr instruction
+	cpu.SetPC(addr)
 
 	for addr < end {
 		if memmap[addr]&(1<<1) != 0 {
@@ -161,52 +126,64 @@ func disAsmSegP2(addr, end int) {
 			addr += printDataBlock(addr, end)
 			continue
 		}
-		fetchInstr(addr, &instr)
+		cpu.FetchInstr()
 		if *prAddr {
-			printLine(addr, &instr)
+			printLine()
 		}
 		printToFile(of, fmt.Sprint("    "))
-		printInst[instr.mode](&instr)
-		addr = instr.next
+		printInst[cpu.Mode()](&cpu)
+		addr = cpu.Next()
 	}
 }
 
 // disassemble pass 1 follows and records jumps/branches
 // so that labels and data blocks can be created
 func disAsmSegP1(addr, end int) {
-	var instr instruction
-	jumps = stack.New()
+	jumps := stack.New()
+	cpu.AttachMem(&memory)
+	cpu.SetPC(addr)
+	var brAddr int
 
 FETCH:
-	for addr < end {
-		fetchInstr(addr, &instr)
+	for {
+		cpu.FetchInstr()
 		// leave breadcrumbs where we've been
-		for i := addr; i < instr.next; i++ {
+		for i := addr; i < addr+cpu.InsLen(); i++ {
 			memmap[i] |= (1 << 0)
 		}
-		// if JSR to somewhere mark that location
-		// and push it onto the stack
-		if instr.code == 0x20 {
-			memmap[instr.branch] |= (1 << 2)
-			if isAddressInSeg(instr.branch) >= 0 {
-				jumps.Push(instr.branch)
+		if cpu.Opcode() == 0x20 {
+			// if JSR to somewhere mark that location
+			// and push it onto the stack
+			brAddr = cpu.AbsJumpAddr()
+			memmap[brAddr] |= (1 << 2)
+			if isAddressInSeg(brAddr) >= 0 {
+				jumps.Push(brAddr)
 			}
+		} else if cpu.Opcode() == 0x4c {
+			// absolute jump
+			addr = cpu.AbsJumpAddr()
+			cpu.SetPC(addr)
+			continue
+		} else if cpu.Mode() == cpu65.Rel {
 			// if it's a branch just mark the location
 			// for label printing
-		} else if instr.mode == rel {
-			memmap[instr.branch] |= (1 << 1)
+			memmap[cpu.BranchAddr()] |= (1 << 1)
+		} else if cpu.Opcode() == 0x60 || cpu.Opcode() == 0x6c {
 			// if RTS then pop any jumps and follow
-		} else if instr.code == 0x60 {
+			// also stop on indirect jump
 			for jumps.Len() != 0 {
 				addr = jumps.Pop().(int)
 				// don't follow if location has been visited
 				if memmap[addr]&(1<<0) != 1 {
+					cpu.SetPC(addr)
 					continue FETCH
 				}
 			}
 			return
+		} else if cpu.Opcode() == 0 {
+			return
 		}
-		addr = instr.next
+		addr = cpu.Next()
 	}
 }
 
